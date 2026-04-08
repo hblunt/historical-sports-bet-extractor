@@ -35,7 +35,7 @@ RACE_TYPES = {
 }
 
 MAIN_VENUES = [
-    "Randwick", "Flemington", "Caulfield", "Eagle Farm", "Doomben", "Gold Coast",
+    "randwick", "flemington", "caulfield", "eagle farm", "doomben", "gold coast",
 ]
 
 VENUE_FILTERS = {
@@ -122,13 +122,19 @@ def extract_results(race_data, winners_only=True):
     return results
 
 
+class CancelledError(Exception):
+    """Raised when the user cancels a download."""
+
+
 def fetch_all_results(from_date, to_date, jurisdiction, race_type_filter=None,
-                      winners_only="winners", venue_filter=None, progress_callback=None):
+                      winners_only="winners", venue_filter=None,
+                      progress_callback=None, cancel_event=None):
     """
     Fetch all racing results between two dates for a jurisdiction.
     race_type_filter: "R", "H", "G", or None for all.
     winners_only: "winners", "top4", or "all".
     progress_callback(message, current, total) is called to report progress.
+    cancel_event: threading.Event that, when set, aborts the download.
     """
     all_rows = []
     current_date = from_date
@@ -146,13 +152,15 @@ def fetch_all_results(from_date, to_date, jurisdiction, race_type_filter=None,
     # First pass: collect all meetings across all dates
     all_meetings_by_date = {}
     for i, d in enumerate(dates):
+        if cancel_event and cancel_event.is_set():
+            raise CancelledError()
         date_str = d.strftime("%Y-%m-%d")
         if progress_callback:
             progress_callback(f"Scanning {date_str}…", i, total_dates)
         try:
             meetings = fetch_meetings(date_str, jurisdiction, race_type_filter)
             if venue_filter:
-                meetings = [m for m in meetings if m.get("meetingName", "") in venue_filter]
+                meetings = [m for m in meetings if m.get("meetingName", "").lower() in venue_filter]
             all_meetings_by_date[date_str] = meetings
             total_meetings += len(meetings)
         except requests.exceptions.HTTPError as e:
@@ -170,6 +178,8 @@ def fetch_all_results(from_date, to_date, jurisdiction, race_type_filter=None,
     meeting_count = 0
     for date_str, meetings in all_meetings_by_date.items():
         for meeting in meetings:
+            if cancel_event and cancel_event.is_set():
+                raise CancelledError()
             meeting_name = meeting.get("meetingName", "Unknown")
             meeting_count += 1
 
@@ -487,11 +497,21 @@ class App(tk.Tk):
         open_cb.grid(row=row, column=1, columnspan=2, sticky="w", pady=(10, 0))
         row += 1
 
-        # ── Download button ─────────────────────────────────────────────
+        # ── Download / Cancel buttons ──────────────────────────────────
+        btn_row_frame = ttk.Frame(self)
+        btn_row_frame.grid(row=row, column=0, columnspan=4, pady=(15, 10))
+
         self.download_btn = ttk.Button(
-            self, text="Download Results", command=self._on_download,
+            btn_row_frame, text="Download Results", command=self._on_download,
         )
-        self.download_btn.grid(row=row, column=0, columnspan=4, pady=(15, 10), ipadx=20, ipady=5)
+        self.download_btn.pack(side=tk.LEFT, ipadx=20, ipady=5)
+
+        self.cancel_btn = ttk.Button(
+            btn_row_frame, text="Cancel", command=self._on_cancel, state="disabled",
+        )
+        self.cancel_btn.pack(side=tk.LEFT, padx=(10, 0), ipadx=10, ipady=5)
+
+        self._cancel_event = None
         row += 1
 
         # ── Status bar ──────────────────────────────────────────────────
@@ -564,21 +584,30 @@ class App(tk.Tk):
         )
         filepath = os.path.join(save_dir, filename)
 
-        # Disable button
+        # Disable download, enable cancel
         self.download_btn.configure(state="disabled", text="Downloading…")
+        self.cancel_btn.configure(state="normal")
+        self._cancel_event = threading.Event()
         self._set_status("Starting…")
 
         # Run in background thread
         thread = threading.Thread(
             target=self._download_thread,
             args=(from_d, to_d, jurisdiction, filepath, race_type_filter,
-                  scope_mode, selected_cols, venue_filter),
+                  scope_mode, selected_cols, venue_filter, self._cancel_event),
             daemon=True,
         )
         thread.start()
 
+    def _on_cancel(self):
+        if self._cancel_event:
+            self._cancel_event.set()
+        self._set_status("Cancelling…")
+        self.cancel_btn.configure(state="disabled")
+
     def _download_thread(self, from_d, to_d, jurisdiction, filepath,
-                         race_type_filter, scope_mode, selected_cols, venue_filter):
+                         race_type_filter, scope_mode, selected_cols,
+                         venue_filter, cancel_event):
         def progress(msg, current, total):
             self.after(0, self._set_status, msg)
 
@@ -589,6 +618,7 @@ class App(tk.Tk):
                 winners_only=scope_mode,
                 venue_filter=venue_filter,
                 progress_callback=progress,
+                cancel_event=cancel_event,
             )
 
             if not rows:
@@ -598,6 +628,8 @@ class App(tk.Tk):
             export_to_xlsx(rows, filepath, selected_columns=selected_cols)
             self.after(0, self._finish_download, filepath, None, False)
 
+        except CancelledError:
+            self.after(0, self._finish_download, None, "Download cancelled.", True)
         except requests.exceptions.ConnectionError:
             self.after(
                 0, self._finish_download, None,
@@ -616,6 +648,8 @@ class App(tk.Tk):
 
     def _finish_download(self, filepath, error_msg, is_error):
         self.download_btn.configure(state="normal", text="Download Results")
+        self.cancel_btn.configure(state="disabled")
+        self._cancel_event = None
 
         if is_error:
             self._set_status(error_msg, colour="#CC0000")
