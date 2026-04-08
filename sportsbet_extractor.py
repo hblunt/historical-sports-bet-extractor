@@ -34,6 +34,15 @@ RACE_TYPES = {
     "All": None,
 }
 
+MAIN_VENUES = [
+    "Randwick", "Flemington", "Caulfield", "Eagle Farm", "Doomben", "Gold Coast",
+]
+
+VENUE_FILTERS = {
+    "All venues": None,
+    "Main races only": MAIN_VENUES,
+}
+
 ALL_COLUMNS = [
     "Date", "Venue", "Race", "Race Name", "Distance",
     "Winner", "No.", "Barrier", "Jockey", "Trainer",
@@ -114,7 +123,7 @@ def extract_results(race_data, winners_only=True):
 
 
 def fetch_all_results(from_date, to_date, jurisdiction, race_type_filter=None,
-                      winners_only="winners", progress_callback=None):
+                      winners_only="winners", venue_filter=None, progress_callback=None):
     """
     Fetch all racing results between two dates for a jurisdiction.
     race_type_filter: "R", "H", "G", or None for all.
@@ -142,6 +151,8 @@ def fetch_all_results(from_date, to_date, jurisdiction, race_type_filter=None,
             progress_callback(f"Scanning {date_str}…", i, total_dates)
         try:
             meetings = fetch_meetings(date_str, jurisdiction, race_type_filter)
+            if venue_filter:
+                meetings = [m for m in meetings if m.get("meetingName", "") in venue_filter]
             all_meetings_by_date[date_str] = meetings
             total_meetings += len(meetings)
         except requests.exceptions.HTTPError as e:
@@ -405,6 +416,16 @@ class App(tk.Tk):
         race_type_combo.grid(row=row, column=3, sticky="w", pady=(10, 0))
         row += 1
 
+        # ── Venues filter ──────────────────────────────────────────────
+        ttk.Label(self, text="Venues:").grid(row=row, column=0, sticky="e", padx=(0, 5), pady=(10, 0))
+        self.venue_filter_var = tk.StringVar(value="All venues")
+        venue_combo = ttk.Combobox(
+            self, textvariable=self.venue_filter_var,
+            values=list(VENUE_FILTERS.keys()), state="readonly", width=14,
+        )
+        venue_combo.grid(row=row, column=1, sticky="w", pady=(10, 0))
+        row += 1
+
         # ── Results scope ──────────────────────────────────────────────
         ttk.Label(self, text="Show:").grid(row=row, column=0, sticky="e", padx=(0, 5), pady=(10, 0))
         self.scope_var = tk.StringVar(value="Winners only")
@@ -528,6 +549,7 @@ class App(tk.Tk):
             return
 
         race_type_filter = RACE_TYPES.get(self.race_type_var.get())
+        venue_filter = VENUE_FILTERS.get(self.venue_filter_var.get())
         scope = self.scope_var.get()
         if scope == "Winners only":
             scope_mode = "winners"
@@ -550,13 +572,13 @@ class App(tk.Tk):
         thread = threading.Thread(
             target=self._download_thread,
             args=(from_d, to_d, jurisdiction, filepath, race_type_filter,
-                  scope_mode, selected_cols),
+                  scope_mode, selected_cols, venue_filter),
             daemon=True,
         )
         thread.start()
 
     def _download_thread(self, from_d, to_d, jurisdiction, filepath,
-                         race_type_filter, scope_mode, selected_cols):
+                         race_type_filter, scope_mode, selected_cols, venue_filter):
         def progress(msg, current, total):
             self.after(0, self._set_status, msg)
 
@@ -565,6 +587,7 @@ class App(tk.Tk):
                 from_d, to_d, jurisdiction,
                 race_type_filter=race_type_filter,
                 winners_only=scope_mode,
+                venue_filter=venue_filter,
                 progress_callback=progress,
             )
 
