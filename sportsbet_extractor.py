@@ -108,7 +108,12 @@ def extract_results(race_data, winners_only=True):
     elif winners_only == "top4":
         placed_numbers = results_order[0][:4]
     else:
-        placed_numbers = results_order[0]
+        # All runners: start with finishing order, then add any runners not in results
+        placed_numbers = list(results_order[0])
+        for r in runners:
+            num = r.get("runnerNumber")
+            if num not in placed_numbers:
+                placed_numbers.append(num)
 
     results = []
     for position, num in enumerate(placed_numbers, 1):
