@@ -96,20 +96,23 @@ def extract_results(race_data, winners_only=True):
     If winners_only=True, returns a list with just the winner.
     If False, returns top 4 placegetters.
     """
-    results_order = race_data.get("results", [[]])
+    results_order = race_data.get("results", [])
     if not results_order or not results_order[0]:
         return []
+
+    # Flatten: [[7], [10], [4], [1]] → [7, 10, 4, 1]
+    flat_order = [num for position_group in results_order for num in position_group]
 
     runners = race_data.get("runners", [])
     runner_map = {r.get("runnerNumber"): r for r in runners}
 
     if winners_only == "winners":
-        placed_numbers = results_order[0][:1]
+        placed_numbers = flat_order[:1]
     elif winners_only == "top4":
-        placed_numbers = results_order[0][:4]
+        placed_numbers = flat_order[:4]
     else:
         # All runners: start with finishing order, then add any runners not in results
-        placed_numbers = list(results_order[0])
+        placed_numbers = list(flat_order)
         for r in runners:
             num = r.get("runnerNumber")
             if num not in placed_numbers:
